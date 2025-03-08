@@ -1,0 +1,225 @@
+package org.example.service;
+
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import org.springframework.stereotype.Service;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.*;
+@Service
+public class CamundaService {
+
+    public static JsonArray prepareCamundaInput(String text) {
+        text=text.toLowerCase();
+        System.out.println("extrated text"+text);
+        JsonArray testResultsArray = new JsonArray();
+        String regex = "(creatinine|creatinine serum|creatinine blood|creatinine level|serum creatinine|bun|blood urea nitrogen|sodium|sodium serum|serum sodium|na|potassium|serum potassium|k|gfr|glomerular filtration rate|gfr creatinine|egfr|uacr|albumin creatinine ratio)\\s+\\b(\\d{1,3}(?:\\.\\d{1,2})?)\\b";
+        Pattern pattern = Pattern.compile(regex, Pattern.MULTILINE | Pattern.CASE_INSENSITIVE);
+        Matcher matcher = pattern.matcher(text);
+
+        JsonObject groupedElectrolytes = new JsonObject(); // To store sodium and potassium together
+
+        while (matcher.find()) {
+            String testName = matcher.group(1).toLowerCase();
+            double testValue = Double.parseDouble(matcher.group(2));
+            System.out.println("Extracted Test Name: " + testName);
+
+            // Standardizing test names
+            if (testName.matches("bun|blood urea nitrogen|bun/creatinine")) {
+                testName = "bun";
+            } else if (testName.matches("creatinine|creatinine serum|creatinine blood|creatinine level|serum creatinine")) {
+                testName = "creatinine";
+            } else if (testName.matches("gfr|glomerular filtration rate|gfr creatinine|egfr")) {
+                testName = "gfr";
+            } else if (testName.matches("uacr|albumin creatinine ratio")) {
+                testName = "uacr";
+            } else if (testName.matches("sodium|sodium serum|serum sodium|na")) {
+                testName = "sodium";
+            } else if (testName.matches("potassium|serum potassium|k")) {
+                testName = "potassium";
+            }
+            System.out.println("final test name Test Name: " + testName);
+
+
+            JsonObject valueObject = new JsonObject();
+            valueObject.addProperty("value", testValue);
+            valueObject.addProperty("type", "Double");
+
+            if (testName.equals("sodium") || testName.equals("potassium")) {
+                groupedElectrolytes.add(testName, valueObject);
+            } else {
+                JsonObject testObject = new JsonObject();
+                JsonObject variableObject = new JsonObject();
+                variableObject.add(testName, valueObject);
+                testObject.add("variables", variableObject);
+                testResultsArray.add(testObject);
+            }
+        }
+
+        // Add grouped sodium & potassium if at least one is present
+        if (groupedElectrolytes.size() > 0) {
+            JsonObject testObject = new JsonObject();
+            testObject.add("variables", groupedElectrolytes);
+            testResultsArray.add(testObject);
+        }
+
+        System.out.println("Final Extracted Test Results: " + testResultsArray);
+        startCamundaAndRunDMN();
+        return testResultsArray;
+    }
+    public static void startCamundaAndRunDMN() {
+        try {
+            // Step 1: Start Camunda BPM Run (if not already running)
+            File camundaPath = new File("C:\\camunda\\camunda-bpm-run-7.13.0"); // Correct path
+            ProcessBuilder processBuilder = new ProcessBuilder("cmd.exe", "/c", "start.bat"); // Use "start.bat"
+            processBuilder.directory(camundaPath);
+            processBuilder.start();
+            Thread.sleep(5000); // Wait for Camunda to start
+
+            // Step 2: Call Camunda REST API to execute DMN
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+    public static void callCamunda(JsonObject extractedData, String dmnKey, JsonArray allResponses) {
+        try {
+
+            System.out.println(extractedData+"table key"+dmnKey+allResponses);
+            String apiUrl = "http://localhost:8080/engine-rest/decision-definition/key/" + dmnKey + "/evaluate";
+            URL url = new URL(apiUrl);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setDoOutput(true);
+
+            // Send JSON Data to Camunda
+            String jsonInput = extractedData.toString();
+            System.out.println("json going "+jsonInput);
+            try (OutputStream os = conn.getOutputStream()) {
+                byte[] input = jsonInput.getBytes("utf-8");
+                os.write(input, 0, input.length);
+            }
+
+            int responseCode = conn.getResponseCode();
+            JsonObject variablesObject = extractedData.getAsJsonObject("variables");
+            String testName = variablesObject.keySet().iterator().next();
+            System.out.println("DMN executed for " + testName + " with response code: " + responseCode);
+
+            // Read and store the response
+            if (responseCode == 200) {
+                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), "utf-8"));
+                StringBuilder response = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    response.append(line);
+                }
+                reader.close();
+
+                System.out.println("Camunda Response: " + response);
+
+                // Convert response to JSON and add to the array
+                allResponses.add(response.toString());
+
+            } else {
+                System.out.println("Error: Camunda returned response code " + responseCode);
+            }
+
+            conn.disconnect();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+    public static void finalOutput(JsonArray allResponses, JsonArray extractedTests) {
+        JsonArray insights = new JsonArray();
+        double totalScore = 0;
+        int testCount = 0;
+
+        // Step 1: Extract test names from extractedTests
+        List<String> testNames = new ArrayList<>();
+        for (JsonElement testElement : extractedTests) {
+            JsonObject testObj = testElement.getAsJsonObject().getAsJsonObject("variables");
+            for (Map.Entry<String, JsonElement> entry : testObj.entrySet()) {
+                testNames.add(entry.getKey());  // Store only the test name
+            }
+        }
+
+        int testIndex = 0;  // To match extracted test names with responses
+
+        // Step 2: Iterate through allResponses and match risk categories
+        for (int i = 0; i < allResponses.size(); i++) {
+            String responseStr = allResponses.get(i).getAsString();
+            JsonArray responseArray = JsonParser.parseString(responseStr).getAsJsonArray();
+
+            for (int j = 0; j < responseArray.size(); j++) {
+                JsonObject responseObj = responseArray.get(j).getAsJsonObject();
+
+                // Get the corresponding test name
+                String testName = (testIndex < testNames.size()) ? testNames.get(testIndex) : "Unknown Test";
+                testIndex++;
+
+                // Extract risk category
+                String riskCategory = "No Risk Data";
+                if (responseObj.has("risk category")) {
+                    JsonObject riskObj = responseObj.getAsJsonObject("risk category");
+                    riskCategory = riskObj.get("value").getAsString();
+                }
+
+                // Extract score for final score calculation
+                if (responseObj.has("score")) {
+                    JsonObject scoreObj = responseObj.getAsJsonObject("score");
+                    totalScore += scoreObj.get("value").getAsDouble();
+                    testCount++;
+                }
+
+                // Store insight
+                JsonObject insight = new JsonObject();
+                insight.addProperty("test_name", testName);
+                insight.addProperty("risk_category", riskCategory);
+                insights.add(insight);
+
+                // Special handling: If testName is "sodium", check for "potassium"
+                if (testName.equalsIgnoreCase("sodium")) {
+                    boolean potassiumFound = false;
+
+                    // Check if "potassium" is also in the extracted test names
+                    if (testIndex < testNames.size() && testNames.get(testIndex).equalsIgnoreCase("potassium")) {
+                        potassiumFound = true;
+                        testIndex++;  // Move index forward since we are handling potassium here
+                    }
+
+                    // If potassium is not found, add it manually with the same risk category
+                    if (!potassiumFound) {
+                        JsonObject potassiumInsight = new JsonObject();
+                        potassiumInsight.addProperty("test_name", "potassium");
+                        potassiumInsight.addProperty("risk_category", riskCategory);  // Use same risk category as sodium
+                        insights.add(potassiumInsight);
+                    }
+                }
+            }
+        }
+
+        // Step 3: Compute final score
+        double finalScore = (testCount > 0) ? totalScore / testCount : 0;
+
+        // Step 4: Construct final JSON output
+        JsonObject finalResult = new JsonObject();
+        finalResult.addProperty("final_score", finalScore);
+        finalResult.add("insights", insights);
+
+        System.out.println(finalResult.toString());  // Print final result
+    }
+
+
+
+
+}
