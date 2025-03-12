@@ -108,7 +108,6 @@ public class TextExtractionService {
                 Tesseract tesseract = new Tesseract();
                 //tesseract.setDatapath("D:/Downloads/Tesseract-OCR/Tesseract-OCR/tessdata"); // Set correct Tesseract path
                 text = tesseract.doOCR(imageFile).toLowerCase();
-                System.out.println(text);
                 extracted = extractTestCases(text).toString();
             } catch (TesseractException e) {
                 e.printStackTrace();
@@ -160,7 +159,7 @@ public class TextExtractionService {
         text=text.toLowerCase();
         System.out.println("extrated text"+text);
         JsonArray testResultsArray = new JsonArray();
-        String regex = "(creatinine|creatinine serum|creatinine blood|creatinine level|serum creatinine|bun|blood urea nitrogen|sodium|sodium serum|serum sodium|na|potassium|serum potassium|k|gfr|glomerular filtration rate|gfr creatinine|egfr|uacr|albumin creatinine ratio)\\s+\\b(\\d{1,3}(?:\\.\\d{1,2})?)\\b";
+        String regex = "(?i)\\b(creatinine|creatinine serum|creatinine blood|creatinine level|serum creatinine|bun|blood urea nitrogen|sodium|sodium serum|serum sodium|na|potassium|serum potassium|k|gfr|glomerular filtration rate|gfr creatinine|egfr|uacr|albumin creatinine ratio)\\b\\s*[:=\\-]?\\s*(\\d{1,3}(?:\\.\\d{1,2})?)";
         Pattern pattern = Pattern.compile(regex, Pattern.MULTILINE | Pattern.CASE_INSENSITIVE);
         Matcher matcher = pattern.matcher(text);
 
