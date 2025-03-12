@@ -139,7 +139,7 @@ public class CamundaService {
             e.printStackTrace();
         }
     }
-    public static void finalOutput(JsonArray allResponses, JsonArray extractedTests) {
+    public static JsonObject finalOutput(JsonArray allResponses, JsonArray extractedTests) {
         JsonArray insights = new JsonArray();
         double totalScore = 0;
         int testCount = 0;
@@ -155,7 +155,7 @@ public class CamundaService {
 
         int testIndex = 0;  // To match extracted test names with responses
 
-        // Step 2: Iterate through allResponses and match risk categories
+        // Step 2: Iterate through allResponses and match risk categories & scores
         for (int i = 0; i < allResponses.size(); i++) {
             String responseStr = allResponses.get(i).getAsString();
             JsonArray responseArray = JsonParser.parseString(responseStr).getAsJsonArray();
@@ -174,10 +174,12 @@ public class CamundaService {
                     riskCategory = riskObj.get("value").getAsString();
                 }
 
-                // Extract score for final score calculation
-                if (responseObj.has("score")) {
-                    JsonObject scoreObj = responseObj.getAsJsonObject("score");
-                    totalScore += scoreObj.get("value").getAsDouble();
+                // Extract test score (from "Scores")
+                int testScore = 0;
+                if (responseObj.has("Scores")) {
+                    JsonObject scoreObj = responseObj.getAsJsonObject("Scores");
+                    testScore = scoreObj.get("value").getAsInt();  // Extract integer value
+                    totalScore += testScore;
                     testCount++;
                 }
 
@@ -185,6 +187,7 @@ public class CamundaService {
                 JsonObject insight = new JsonObject();
                 insight.addProperty("test_name", testName);
                 insight.addProperty("risk_category", riskCategory);
+                insight.addProperty("score", testScore); // Include score for each test
                 insights.add(insight);
 
                 // Special handling: If testName is "sodium", check for "potassium"
@@ -201,7 +204,8 @@ public class CamundaService {
                     if (!potassiumFound) {
                         JsonObject potassiumInsight = new JsonObject();
                         potassiumInsight.addProperty("test_name", "potassium");
-                        potassiumInsight.addProperty("risk_category", riskCategory);  // Use same risk category as sodium
+                        potassiumInsight.addProperty("risk_category", riskCategory);
+                        potassiumInsight.addProperty("score", testScore); // Use same score as sodium
                         insights.add(potassiumInsight);
                     }
                 }
@@ -216,10 +220,9 @@ public class CamundaService {
         finalResult.addProperty("final_score", finalScore);
         finalResult.add("insights", insights);
 
-        System.out.println(finalResult.toString());  // Print final result
+        System.out.println(finalResult.toString());
+        return finalResult;
     }
-
-
 
 
 }
